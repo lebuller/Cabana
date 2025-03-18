@@ -357,8 +357,8 @@ class HypreStructuredSolver
     template <class Array_t>
     void solve( const Array_t& b, Array_t& x )
     {
-        Kokkos::Profiling::ScopedRegion region(
-            "Cabana::Grid::HypreStructuredSolver::solve" );
+        // Kokkos::Profiling::ScopedRegion region(
+        //     "Cabana::Grid::HypreStructuredSolver::solve" );
 
         static_assert( is_array<Array_t>::value, "Must use an array" );
         static_assert(
@@ -384,7 +384,8 @@ class HypreStructuredSolver
         // Spatial dimension.
         const std::size_t num_space_dim = Array_t::num_space_dim;
 
-        // Copy the RHS into HYPRE. The HYPRE layout is fixed as layout-right.
+        // Copy the RHS into HYPRE. The HYPRE layout is fixed as
+        // layout-right.
         auto owned_space = b.layout()->indexSpace( Own(), Local() );
         std::array<long, num_space_dim + 1> reorder_size;
         for ( std::size_t d = 0; d < num_space_dim; ++d )
@@ -396,27 +397,41 @@ class HypreStructuredSolver
         auto vector_values =
             createView<HYPRE_Complex, Kokkos::LayoutRight, memory_space>(
                 "vector_values", reorder_space );
-        auto b_subv = createSubview( b.view(), owned_space );
-        Kokkos::deep_copy( vector_values, b_subv );
 
-        // Insert b values into the HYPRE vector.
-        auto error = HYPRE_StructVectorSetBoxValues(
-            _b, _lower.data(), _upper.data(), vector_values.data() );
-        checkHypreError( error );
-        error = HYPRE_StructVectorAssemble( _b );
-        checkHypreError( error );
+        {
+            Kokkos::Profiling::ScopedRegion region(
+                "Cabana::Grid::HypreStructuredSolver::createHYPRE RHS" );
+            auto b_subv = createSubview( b.view(), owned_space );
+            Kokkos::deep_copy( vector_values, b_subv );
 
-        // Solve the problem
-        this->solveImpl();
+            // Insert b values into the HYPRE vector.
+            auto error = HYPRE_StructVectorSetBoxValues(
+                _b, _lower.data(), _upper.data(), vector_values.data() );
+            checkHypreError( error );
+            error = HYPRE_StructVectorAssemble( _b );
+            checkHypreError( error );
+        }
 
-        // Extract the solution from the LHS
-        error = HYPRE_StructVectorGetBoxValues(
-            _x, _lower.data(), _upper.data(), vector_values.data() );
-        checkHypreError( error );
+        {
+            Kokkos::Profiling::ScopedRegion region(
+                "Cabana::Grid::HypreStructuredSolver::solve" );
+            // Solve the problem
+            this->solveImpl();
+        }
 
-        // Copy the HYPRE solution to the LHS.
-        auto x_subv = createSubview( x.view(), owned_space );
-        Kokkos::deep_copy( x_subv, vector_values );
+        {
+            Kokkos::Profiling::ScopedRegion region(
+                "Cabana::Grid::HypreStructuredSolver::extractSolution" );
+
+            // Extract the solution from the LHS
+            auto error = HYPRE_StructVectorGetBoxValues(
+                _x, _lower.data(), _upper.data(), vector_values.data() );
+            checkHypreError( error );
+
+            // Copy the HYPRE solution to the LHS.
+            auto x_subv = createSubview( x.view(), owned_space );
+            Kokkos::deep_copy( x_subv, vector_values );
+        }
     }
 
     //! Get the number of iterations taken on the last solve.
